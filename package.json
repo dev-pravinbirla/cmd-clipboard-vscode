@@ -1,0 +1,246 @@
+{
+  "name": "cmd-clipboard",
+  "displayName": "Command Clipboard",
+  "description": "Quick access to frequently used commands with copy-to-clipboard, folders, pinning, and project/workspace/global scopes",
+  "version": "0.5.0",
+  "publisher": "pravin-birla",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/dev-pravinbirla/cmd-clipboard-vscode"
+  },
+  "icon": "resources/icon.png",
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "cmd-clipboard",
+          "title": "Command Clipboard",
+          "icon": "resources/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "cmd-clipboard": [
+        {
+          "id": "cmdClipboard.pinnedView",
+          "name": "Pinned"
+        },
+        {
+          "id": "cmdClipboard.globalView",
+          "name": "Global Commands"
+        },
+        {
+          "id": "cmdClipboard.workspaceView",
+          "name": "Workspace Commands"
+        },
+        {
+          "id": "cmdClipboard.projectView",
+          "name": "Project Commands"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "cmdClipboard.copyCommand",
+        "title": "Copy Command",
+        "icon": "$(clippy)"
+      },
+      {
+        "command": "cmdClipboard.pinCommand",
+        "title": "Pin/Unpin Command",
+        "icon": "$(pin)"
+      },
+      {
+        "command": "cmdClipboard.addItem",
+        "title": "Add Command or Folder",
+        "icon": "$(add)"
+      },
+      {
+        "command": "cmdClipboard.addGlobalItem",
+        "title": "Add Global Command or Folder",
+        "icon": "$(add)"
+      },
+      {
+        "command": "cmdClipboard.addWorkspaceItem",
+        "title": "Add Workspace Command or Folder",
+        "icon": "$(add)"
+      },
+      {
+        "command": "cmdClipboard.addProjectItem",
+        "title": "Add Project Command or Folder",
+        "icon": "$(add)"
+      },
+      {
+        "command": "cmdClipboard.editCommand",
+        "title": "Edit",
+        "icon": "$(edit)"
+      },
+      {
+        "command": "cmdClipboard.deleteItem",
+        "title": "Delete",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "cmdClipboard.addCommandToFolder",
+        "title": "Add Command Here",
+        "icon": "$(add)"
+      },
+      {
+        "command": "cmdClipboard.moveToFolder",
+        "title": "Move to Folder"
+      },
+      {
+        "command": "cmdClipboard.togglePanel",
+        "title": "Toggle Command Clipboard"
+      },
+      {
+        "command": "cmdClipboard.refreshAll",
+        "title": "Refresh Commands",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "cmdClipboard.runInTerminal",
+        "title": "Run in Terminal",
+        "icon": "$(play)"
+      },
+      {
+        "command": "cmdClipboard.searchCommands",
+        "title": "Search Commands",
+        "icon": "$(search)"
+      },
+      {
+        "command": "cmdClipboard.duplicateCommand",
+        "title": "Duplicate Command",
+        "icon": "$(copy)"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "cmdClipboard.searchCommands",
+          "when": "view == cmdClipboard.pinnedView || view == cmdClipboard.globalView || view == cmdClipboard.workspaceView || view == cmdClipboard.projectView",
+          "group": "navigation@1"
+        },
+        {
+          "command": "cmdClipboard.refreshAll",
+          "when": "view == cmdClipboard.pinnedView || view == cmdClipboard.globalView || view == cmdClipboard.workspaceView || view == cmdClipboard.projectView",
+          "group": "navigation@2"
+        },
+        {
+          "command": "cmdClipboard.addGlobalItem",
+          "when": "view == cmdClipboard.globalView",
+          "group": "navigation@3"
+        },
+        {
+          "command": "cmdClipboard.addWorkspaceItem",
+          "when": "view == cmdClipboard.workspaceView",
+          "group": "navigation@3"
+        },
+        {
+          "command": "cmdClipboard.addProjectItem",
+          "when": "view == cmdClipboard.projectView",
+          "group": "navigation@3"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "cmdClipboard.runInTerminal",
+          "when": "viewItem == command || viewItem == pinnedCommand",
+          "group": "inline@0"
+        },
+        {
+          "command": "cmdClipboard.copyCommand",
+          "when": "viewItem == command || viewItem == pinnedCommand",
+          "group": "inline@1"
+        },
+        {
+          "command": "cmdClipboard.pinCommand",
+          "when": "viewItem == command || viewItem == pinnedCommand",
+          "group": "inline@2"
+        },
+        {
+          "command": "cmdClipboard.editCommand",
+          "when": "viewItem == command || viewItem == pinnedCommand || viewItem == folder",
+          "group": "inline@3"
+        },
+        {
+          "command": "cmdClipboard.addCommandToFolder",
+          "when": "viewItem == folder",
+          "group": "inline@0"
+        },
+        {
+          "command": "cmdClipboard.deleteItem",
+          "when": "viewItem == command || viewItem == pinnedCommand || viewItem == folder",
+          "group": "inline@4"
+        },
+        {
+          "command": "cmdClipboard.addCommandToFolder",
+          "when": "viewItem == folder",
+          "group": "context@0"
+        },
+        {
+          "command": "cmdClipboard.moveToFolder",
+          "when": "viewItem == command",
+          "group": "context@1"
+        },
+        {
+          "command": "cmdClipboard.duplicateCommand",
+          "when": "viewItem == command || viewItem == pinnedCommand",
+          "group": "context@2"
+        }
+      ]
+    },
+    "viewsWelcome": [
+      {
+        "view": "cmdClipboard.pinnedView",
+        "contents": "No pinned commands yet.\nPin a command using the pin icon."
+      },
+      {
+        "view": "cmdClipboard.globalView",
+        "contents": "No global commands yet.\n[Add Command](command:cmdClipboard.addGlobalItem)"
+      },
+      {
+        "view": "cmdClipboard.workspaceView",
+        "contents": "No workspace commands yet.\n[Add Command](command:cmdClipboard.addWorkspaceItem)"
+      },
+      {
+        "view": "cmdClipboard.projectView",
+        "contents": "No project commands yet.\n[Add Command](command:cmdClipboard.addProjectItem)"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "cmdClipboard.togglePanel",
+        "key": "ctrl+shift+q",
+        "mac": "cmd+shift+q"
+      }
+    ]
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "package": "vsce package",
+    "test": "jest --verbose"
+  },
+  "devDependencies": {
+    "@types/jest": "^30.0.0",
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.85.0",
+    "@vscode/vsce": "^2.22.0",
+    "jest": "^30.3.0",
+    "ts-jest": "^29.4.6",
+    "typescript": "^5.3.0"
+  }
+}
