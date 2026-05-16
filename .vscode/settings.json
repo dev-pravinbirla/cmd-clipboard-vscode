@@ -1,0 +1,4 @@
+{
+    "debug.showInStatusBar": "onFirstSessionStart",
+    "editor.suggest.showStatusBar": false
+}

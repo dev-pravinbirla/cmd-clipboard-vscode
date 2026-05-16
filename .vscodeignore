@@ -1,6 +1,13 @@
 .vscode/**
 .vscode-test/**
+.claude/**
 src/**
+out/__tests__/**
+node_modules/**
 .gitignore
 tsconfig.json
-node_modules/**
+jest.config.js
+AI_FEATURES_PLAN.md
+PUBLISHING.md
+*.vsix
+resources/icon-marketplace.svg

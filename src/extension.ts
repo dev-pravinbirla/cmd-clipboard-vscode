@@ -50,6 +50,20 @@ export function activate(context: vscode.ExtensionContext) {
     return pick?.path;
   }
 
+  // --- Helper: send a command to a terminal, clearing any half-typed input first ---
+  function runInTerminal(snippet: string): void {
+    const terminal = vscode.window.activeTerminal ?? vscode.window.createTerminal('Command Clipboard');
+    terminal.show();
+    const clearBeforeRun = vscode.workspace
+      .getConfiguration('cmdClipboard')
+      .get<boolean>('terminal.clearBeforeRun', true);
+    if (clearBeforeRun) {
+      // Ctrl+U clears the current line in bash/zsh/fish/PowerShell readline without executing it.
+      terminal.sendText('\x15', false);
+    }
+    terminal.sendText(snippet);
+  }
+
   // --- Helper: ask user for scope (used by command palette fallback) ---
   async function pickScope(): Promise<CommandScope | undefined> {
     const pick = await vscode.window.showQuickPick(
@@ -344,9 +358,7 @@ export function activate(context: vscode.ExtensionContext) {
       const cmd = resolveCommand(item);
       if (!cmd) { return; }
 
-      const terminal = vscode.window.activeTerminal ?? vscode.window.createTerminal('Command Clipboard');
-      terminal.show();
-      terminal.sendText(cmd.snippet);
+      runInTerminal(cmd.snippet);
     })
   );
 
@@ -386,9 +398,7 @@ export function activate(context: vscode.ExtensionContext) {
         await vscode.env.clipboard.writeText(pick.cmd.snippet);
         vscode.window.showInformationMessage(`Copied: ${pick.cmd.label}`);
       } else if (action?.action === 'run') {
-        const terminal = vscode.window.activeTerminal ?? vscode.window.createTerminal('Command Clipboard');
-        terminal.show();
-        terminal.sendText(pick.cmd.snippet);
+        runInTerminal(pick.cmd.snippet);
       }
     })
   );
