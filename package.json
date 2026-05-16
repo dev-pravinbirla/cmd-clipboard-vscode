@@ -2,7 +2,7 @@
   "name": "cmd-clipboard",
   "displayName": "Command Clipboard",
   "description": "Quick access to frequently used commands with copy-to-clipboard, folders, pinning, and project/workspace/global scopes",
-  "version": "0.5.0",
+  "version": "0.5.3",
   "publisher": "pravin-birla",
   "engines": {
     "vscode": "^1.85.0"
@@ -225,7 +225,17 @@
         "key": "ctrl+shift+q",
         "mac": "cmd+shift+q"
       }
-    ]
+    ],
+    "configuration": {
+      "title": "Command Clipboard",
+      "properties": {
+        "cmdClipboard.terminal.clearBeforeRun": {
+          "type": "boolean",
+          "default": true,
+          "description": "Clear any half-typed input on the terminal prompt before running a saved command. Sends Ctrl+U first, which works in bash, zsh, fish, and PowerShell readline. Disable if your shell does not support it."
+        }
+      }
+    }
   },
   "scripts": {
     "vscode:prepublish": "npm run compile",
