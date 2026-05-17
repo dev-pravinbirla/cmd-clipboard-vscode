@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Webview edit form** — Edit a command (name, command, description) in a single dedicated panel instead of three sequential prompts. Supports `Cmd/Ctrl+Enter` to save and `Esc` to cancel.
+- **Rename shortcut** — `F2` on a selected command or folder renames it in place. Also available from the right-click context menu.
+- **Run Selected in Terminal** — Select multiple commands in the tree (Cmd/Ctrl- or Shift-click) and run them chained with `&&` in selection order. Shows a confirmation modal with the joined command before execution.
+- New `cmdClipboard.allowComplexChaining` setting — opt in to chaining commands that already contain `&&`, `||`, `;`, or newlines (off by default to prevent malformed chains).
+
 ## [0.5.3] - 2026-05-16
 
 ### Added

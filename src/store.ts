@@ -5,6 +5,20 @@ function generateId(): string {
   return Date.now().toString(36) + Math.random().toString(36).substring(2, 8);
 }
 
+export interface ExportData {
+  version: number;
+  exportedAt: number;
+  global: StoreData;
+  workspace: StoreData;
+}
+
+export type ImportMode = 'merge' | 'replace';
+
+export interface ImportSummary {
+  commands: number;
+  folders: number;
+}
+
 export class CommandStore {
   private static GLOBAL_KEY = 'cmdClipboard.globalData';
   private static WORKSPACE_KEY = 'cmdClipboard.workspaceData';
@@ -250,6 +264,111 @@ export class CommandStore {
     if (gFolder) { return gFolder; }
     const wsData = this.getWorkspaceData();
     return wsData.folders.find(f => f.id === folderId);
+  }
+
+  // --- Export / Import ---
+
+  exportAllData(): ExportData {
+    return {
+      version: 1,
+      exportedAt: Date.now(),
+      global: this.getGlobalData(),
+      workspace: this.getWorkspaceData(),
+    };
+  }
+
+  /**
+   * Merge data found in legacy publisher storage. IDs are preserved so that
+   * if this ever runs twice, duplicates are skipped on the second pass.
+   */
+  async mergeLegacy(
+    legacyGlobal: { commands: CmdEntry[]; folders: CmdFolder[] },
+    legacyWorkspace: { commands: CmdEntry[]; folders: CmdFolder[] },
+  ): Promise<ImportSummary> {
+    let added = 0;
+    let addedFolders = 0;
+
+    if (legacyGlobal.commands.length || legacyGlobal.folders.length) {
+      const globalData = this.getGlobalData();
+      const cmdIds = new Set(globalData.commands.map(c => c.id));
+      const folderIds = new Set(globalData.folders.map(f => f.id));
+      for (const c of legacyGlobal.commands) {
+        if (!cmdIds.has(c.id)) { globalData.commands.push(c); added++; }
+      }
+      for (const f of legacyGlobal.folders) {
+        if (!folderIds.has(f.id)) { globalData.folders.push(f); addedFolders++; }
+      }
+      await this.saveGlobalData(globalData);
+    }
+
+    if (legacyWorkspace.commands.length || legacyWorkspace.folders.length) {
+      const wsData = this.getWorkspaceData();
+      const cmdIds = new Set(wsData.commands.map(c => c.id));
+      const folderIds = new Set(wsData.folders.map(f => f.id));
+      for (const c of legacyWorkspace.commands) {
+        if (!cmdIds.has(c.id)) { wsData.commands.push(c); added++; }
+      }
+      for (const f of legacyWorkspace.folders) {
+        if (!folderIds.has(f.id)) { wsData.folders.push(f); addedFolders++; }
+      }
+      await this.saveWorkspaceData(wsData);
+    }
+
+    return { commands: added, folders: addedFolders };
+  }
+
+  async importData(data: ExportData, mode: ImportMode): Promise<ImportSummary> {
+    if (!data || typeof data !== 'object' || !data.global || !data.workspace) {
+      throw new Error('Invalid backup file: missing global/workspace sections.');
+    }
+
+    if (mode === 'replace') {
+      await this.saveGlobalData(data.global);
+      await this.saveWorkspaceData(data.workspace);
+      return {
+        commands: data.global.commands.length + data.workspace.commands.length,
+        folders: data.global.folders.length + data.workspace.folders.length,
+      };
+    }
+
+    // Merge: regenerate ids to avoid collisions, remap folderId references.
+    const folderIdMap = new Map<string, string>();
+
+    const remapFolders = (folders: CmdFolder[]): CmdFolder[] =>
+      folders.map(f => {
+        const newId = generateId();
+        folderIdMap.set(f.id, newId);
+        const { _commandCount, ...rest } = f;
+        return { ...rest, id: newId };
+      });
+
+    const remapCommands = (cmds: CmdEntry[]): CmdEntry[] =>
+      cmds.map(c => ({
+        ...c,
+        id: generateId(),
+        folderId: c.folderId ? folderIdMap.get(c.folderId) ?? undefined : undefined,
+      }));
+
+    const importedGlobalFolders = remapFolders(data.global.folders);
+    const importedGlobalCommands = remapCommands(data.global.commands);
+    const importedWsFolders = remapFolders(data.workspace.folders);
+    const importedWsCommands = remapCommands(data.workspace.commands);
+
+    const globalData = this.getGlobalData();
+    globalData.folders.push(...importedGlobalFolders);
+    globalData.commands.push(...importedGlobalCommands);
+
+    const wsData = this.getWorkspaceData();
+    wsData.folders.push(...importedWsFolders);
+    wsData.commands.push(...importedWsCommands);
+
+    await this.saveGlobalData(globalData);
+    await this.saveWorkspaceData(wsData);
+
+    return {
+      commands: importedGlobalCommands.length + importedWsCommands.length,
+      folders: importedGlobalFolders.length + importedWsFolders.length,
+    };
   }
 
   async editFolder(folderId: string, label: string): Promise<void> {
