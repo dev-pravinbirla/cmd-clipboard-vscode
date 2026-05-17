@@ -2,7 +2,7 @@
   "name": "cmd-clipboard",
   "displayName": "Command Clipboard",
   "description": "Quick access to frequently used commands with copy-to-clipboard, folders, pinning, and project/workspace/global scopes",
-  "version": "0.5.3",
+  "version": "0.5.4",
   "publisher": "pravin-birla",
   "engines": {
     "vscode": "^1.85.0"
@@ -63,23 +63,51 @@
       },
       {
         "command": "cmdClipboard.addItem",
-        "title": "Add Command or Folder",
-        "icon": "$(add)"
+        "title": "Add Command",
+        "icon": "$(add)",
+        "category": "Command Clipboard"
+      },
+      {
+        "command": "cmdClipboard.addFolderItem",
+        "title": "Add Folder",
+        "icon": "$(new-folder)",
+        "category": "Command Clipboard"
       },
       {
         "command": "cmdClipboard.addGlobalItem",
-        "title": "Add Global Command or Folder",
-        "icon": "$(add)"
+        "title": "Add Global Command",
+        "icon": "$(add)",
+        "category": "Command Clipboard"
       },
       {
         "command": "cmdClipboard.addWorkspaceItem",
-        "title": "Add Workspace Command or Folder",
-        "icon": "$(add)"
+        "title": "Add Workspace Command",
+        "icon": "$(add)",
+        "category": "Command Clipboard"
       },
       {
         "command": "cmdClipboard.addProjectItem",
-        "title": "Add Project Command or Folder",
-        "icon": "$(add)"
+        "title": "Add Project Command",
+        "icon": "$(add)",
+        "category": "Command Clipboard"
+      },
+      {
+        "command": "cmdClipboard.addGlobalFolder",
+        "title": "Add Global Folder",
+        "icon": "$(new-folder)",
+        "category": "Command Clipboard"
+      },
+      {
+        "command": "cmdClipboard.addWorkspaceFolder",
+        "title": "Add Workspace Folder",
+        "icon": "$(new-folder)",
+        "category": "Command Clipboard"
+      },
+      {
+        "command": "cmdClipboard.addProjectFolder",
+        "title": "Add Project Folder",
+        "icon": "$(new-folder)",
+        "category": "Command Clipboard"
       },
       {
         "command": "cmdClipboard.editCommand",
@@ -123,6 +151,27 @@
         "command": "cmdClipboard.duplicateCommand",
         "title": "Duplicate Command",
         "icon": "$(copy)"
+      },
+      {
+        "command": "cmdClipboard.renameCommand",
+        "title": "Rename"
+      },
+      {
+        "command": "cmdClipboard.runSelectedInTerminal",
+        "title": "Run Selected in Terminal",
+        "icon": "$(run-all)"
+      },
+      {
+        "command": "cmdClipboard.exportAll",
+        "title": "Export All to JSON",
+        "icon": "$(cloud-download)",
+        "category": "Command Clipboard"
+      },
+      {
+        "command": "cmdClipboard.importJson",
+        "title": "Import from JSON",
+        "icon": "$(cloud-upload)",
+        "category": "Command Clipboard"
       }
     ],
     "menus": {
@@ -143,14 +192,29 @@
           "group": "navigation@3"
         },
         {
+          "command": "cmdClipboard.addGlobalFolder",
+          "when": "view == cmdClipboard.globalView",
+          "group": "navigation@4"
+        },
+        {
           "command": "cmdClipboard.addWorkspaceItem",
           "when": "view == cmdClipboard.workspaceView",
           "group": "navigation@3"
         },
         {
+          "command": "cmdClipboard.addWorkspaceFolder",
+          "when": "view == cmdClipboard.workspaceView",
+          "group": "navigation@4"
+        },
+        {
           "command": "cmdClipboard.addProjectItem",
           "when": "view == cmdClipboard.projectView",
           "group": "navigation@3"
+        },
+        {
+          "command": "cmdClipboard.addProjectFolder",
+          "when": "view == cmdClipboard.projectView",
+          "group": "navigation@4"
         }
       ],
       "view/item/context": [
@@ -198,6 +262,16 @@
           "command": "cmdClipboard.duplicateCommand",
           "when": "viewItem == command || viewItem == pinnedCommand",
           "group": "context@2"
+        },
+        {
+          "command": "cmdClipboard.renameCommand",
+          "when": "viewItem == command || viewItem == pinnedCommand || viewItem == folder",
+          "group": "context@3"
+        },
+        {
+          "command": "cmdClipboard.runSelectedInTerminal",
+          "when": "viewItem == command || viewItem == pinnedCommand",
+          "group": "context@4"
         }
       ]
     },
@@ -224,6 +298,11 @@
         "command": "cmdClipboard.togglePanel",
         "key": "ctrl+shift+q",
         "mac": "cmd+shift+q"
+      },
+      {
+        "command": "cmdClipboard.renameCommand",
+        "key": "f2",
+        "when": "focusedView == cmdClipboard.pinnedView || focusedView == cmdClipboard.globalView || focusedView == cmdClipboard.workspaceView || focusedView == cmdClipboard.projectView"
       }
     ],
     "configuration": {
@@ -233,6 +312,11 @@
           "type": "boolean",
           "default": true,
           "description": "Clear any half-typed input on the terminal prompt before running a saved command. Sends Ctrl+U first, which works in bash, zsh, fish, and PowerShell readline. Disable if your shell does not support it."
+        },
+        "cmdClipboard.allowComplexChaining": {
+          "type": "boolean",
+          "default": false,
+          "description": "Allow 'Run Selected in Terminal' to chain commands that already contain &&, ||, ;, or newlines. Off by default to prevent malformed chains."
         }
       }
     }
@@ -247,10 +331,14 @@
   "devDependencies": {
     "@types/jest": "^30.0.0",
     "@types/node": "^20.0.0",
+    "@types/sql.js": "^1.4.11",
     "@types/vscode": "^1.85.0",
     "@vscode/vsce": "^2.22.0",
     "jest": "^30.3.0",
     "ts-jest": "^29.4.6",
     "typescript": "^5.3.0"
+  },
+  "dependencies": {
+    "sql.js": "^1.14.1"
   }
 }

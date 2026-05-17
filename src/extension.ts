@@ -1,23 +1,95 @@
 import * as vscode from 'vscode';
-import { CommandStore } from './store';
+import * as path from 'path';
+import { CommandStore, ExportData } from './store';
+import { showCommandForm } from './commandForm';
 import { CommandTreeItem, PinnedTreeProvider, ProjectTreeProvider, ScopedTreeProvider } from './treeProvider';
 import { CmdEntry, CmdFolder, CommandScope } from './types';
+import { discoverLegacyGlobal, discoverLegacyWorkspace } from './migration';
+
+const LEGACY_GLOBAL_FLAG = 'cmdClipboard.legacyGlobalMigrationDone';
+const LEGACY_WORKSPACE_FLAG = 'cmdClipboard.legacyWorkspaceMigrationDone';
+
+async function runLegacyMigration(
+  context: vscode.ExtensionContext,
+  store: CommandStore,
+): Promise<void> {
+  const globalDone = context.globalState.get<boolean>(LEGACY_GLOBAL_FLAG, false);
+  const workspaceDone = context.workspaceState.get<boolean>(LEGACY_WORKSPACE_FLAG, false);
+  if (globalDone && workspaceDone) { return; }
+
+  try {
+    const legacyGlobal = globalDone
+      ? { commands: [], folders: [] }
+      : await discoverLegacyGlobal(context.extensionPath);
+
+    // Determine the current workspace's state.vscdb path from VS Code's
+    // per-workspace storageUri. storageUri is undefined when no folder is open.
+    let legacyWorkspace: { commands: import('./types').CmdEntry[]; folders: import('./types').CmdFolder[] } = { commands: [], folders: [] };
+    if (!workspaceDone && context.storageUri) {
+      const wsDb = path.join(path.dirname(context.storageUri.fsPath), 'state.vscdb');
+      legacyWorkspace = await discoverLegacyWorkspace(context.extensionPath, wsDb);
+    }
+
+    const total = legacyGlobal.commands.length + legacyGlobal.folders.length
+      + legacyWorkspace.commands.length + legacyWorkspace.folders.length;
+
+    if (total === 0) {
+      // Nothing to migrate — mark flags so we don't keep scanning every launch.
+      if (!globalDone) { await context.globalState.update(LEGACY_GLOBAL_FLAG, true); }
+      if (!workspaceDone) { await context.workspaceState.update(LEGACY_WORKSPACE_FLAG, true); }
+      return;
+    }
+
+    const summary = `${legacyGlobal.commands.length + legacyWorkspace.commands.length} commands and ${legacyGlobal.folders.length + legacyWorkspace.folders.length} folders`;
+    const choice = await vscode.window.showInformationMessage(
+      `Command Clipboard found ${summary} from an older version of this extension. Recover them?`,
+      'Recover',
+      'Dismiss',
+    );
+
+    if (choice === 'Recover') {
+      const result = await store.mergeLegacy(legacyGlobal, legacyWorkspace);
+      vscode.window.showInformationMessage(
+        `Recovered ${result.commands} commands and ${result.folders} folders.`,
+      );
+    }
+
+    // Either way, set flags so we don't keep prompting.
+    if (!globalDone) { await context.globalState.update(LEGACY_GLOBAL_FLAG, true); }
+    if (!workspaceDone) { await context.workspaceState.update(LEGACY_WORKSPACE_FLAG, true); }
+  } catch (err) {
+    // Migration is best-effort: never block activation, never disrupt the user.
+    console.error('cmd-clipboard legacy migration failed:', err);
+  }
+}
 
 export function activate(context: vscode.ExtensionContext) {
   const store = new CommandStore(context.globalState, context.workspaceState);
 
-  // Register tree providers
+  // Best-effort one-time migration from older publisher ids. Runs async — does
+  // not block activation. See src/migration.ts for what it reads.
+  void runLegacyMigration(context, store);
+
+  // Register tree providers (createTreeView gives us access to selection for multi-select run)
   const pinnedProvider = new PinnedTreeProvider(store);
   const globalProvider = new ScopedTreeProvider(store, 'global', () => undefined);
   const workspaceProvider = new ScopedTreeProvider(store, 'workspace', () => undefined);
   const projectProvider = new ProjectTreeProvider(store);
 
-  context.subscriptions.push(
-    vscode.window.registerTreeDataProvider('cmdClipboard.pinnedView', pinnedProvider),
-    vscode.window.registerTreeDataProvider('cmdClipboard.globalView', globalProvider),
-    vscode.window.registerTreeDataProvider('cmdClipboard.workspaceView', workspaceProvider),
-    vscode.window.registerTreeDataProvider('cmdClipboard.projectView', projectProvider),
-  );
+  const pinnedTreeView = vscode.window.createTreeView('cmdClipboard.pinnedView', {
+    treeDataProvider: pinnedProvider, canSelectMany: true,
+  });
+  const globalTreeView = vscode.window.createTreeView('cmdClipboard.globalView', {
+    treeDataProvider: globalProvider, canSelectMany: true,
+  });
+  const workspaceTreeView = vscode.window.createTreeView('cmdClipboard.workspaceView', {
+    treeDataProvider: workspaceProvider, canSelectMany: true,
+  });
+  const projectTreeView = vscode.window.createTreeView('cmdClipboard.projectView', {
+    treeDataProvider: projectProvider, canSelectMany: true,
+  });
+  const treeViews = [pinnedTreeView, globalTreeView, workspaceTreeView, projectTreeView];
+  context.subscriptions.push(...treeViews);
 
   // --- Status bar button ---
   const statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
@@ -50,6 +122,15 @@ export function activate(context: vscode.ExtensionContext) {
     return pick?.path;
   }
 
+  // --- Helper: short human label for a scope/project pair, shown as a form badge ---
+  function formatScopeBadge(scope: CommandScope, projectPath?: string): string {
+    if (scope === 'project' && projectPath) {
+      const name = projectPath.split(/[\\/]/).filter(Boolean).pop() ?? projectPath;
+      return `Project · ${name}`;
+    }
+    return scope.charAt(0).toUpperCase() + scope.slice(1);
+  }
+
   // --- Helper: send a command to a terminal, clearing any half-typed input first ---
   function runInTerminal(snippet: string): void {
     const terminal = vscode.window.activeTerminal ?? vscode.window.createTerminal('Command Clipboard');
@@ -77,65 +158,34 @@ export function activate(context: vscode.ExtensionContext) {
     return pick?.scope;
   }
 
-  // --- Shared add logic (scope already known) ---
-  async function addItemWithScope(scope: CommandScope, projectPath?: string) {
-    // Step 1: What to add?
-    const typePick = await vscode.window.showQuickPick(
-      [
-        { label: '$(terminal) Command', description: 'A command snippet to copy', type: 'command' },
-        { label: '$(folder) Folder', description: 'A folder to organize commands', type: 'folder' },
-      ],
-      { placeHolder: 'What do you want to add?' }
-    );
-    if (!typePick) { return; }
+  // --- Add command (scope already known): opens the webview form directly ---
+  async function addCommandWithScope(scope: CommandScope, projectPath?: string) {
+    const folders = store.getFolders(scope, projectPath);
+    const result = await showCommandForm({
+      mode: 'add',
+      initial: { label: '', snippet: '', description: '', folderId: undefined },
+      folders: folders.map(f => ({ id: f.id, label: f.label })),
+      scopeBadge: formatScopeBadge(scope, projectPath),
+    });
+    if (!result) { return; }
 
-    if (typePick.type === 'folder') {
-      const label = await vscode.window.showInputBox({
-        prompt: 'Folder name',
-        placeHolder: 'e.g. Docker, Git, Build',
-      });
-      if (!label) { return; }
-
-      await store.addFolder(label, scope, projectPath);
-      vscode.window.showInformationMessage(`Folder created: ${label}`);
-    } else {
-      const label = await vscode.window.showInputBox({
-        prompt: 'Command name (display label)',
-        placeHolder: 'e.g. Start dev server',
-      });
-      if (!label) { return; }
-
-      const snippet = await vscode.window.showInputBox({
-        prompt: 'The actual command to copy',
-        placeHolder: 'e.g. npm run dev',
-      });
-      if (!snippet) { return; }
-
-      const description = await vscode.window.showInputBox({
-        prompt: 'Description (optional, press Enter to skip)',
-        placeHolder: 'e.g. Starts the development server on port 3000',
-      });
-
-      // Pick a folder to put it in
-      const folders = store.getFolders(scope, projectPath);
-      let folderId: string | undefined;
-      if (folders.length > 0) {
-        const folderPick = await vscode.window.showQuickPick(
-          [
-            { label: '(No folder)', id: undefined as string | undefined },
-            ...folders.map(f => ({ label: f.label, id: f.id as string | undefined })),
-          ],
-          { placeHolder: 'Put in folder? (optional)' }
-        );
-        folderId = folderPick?.id;
-      }
-
-      await store.addCommand(label, snippet, scope, folderId, projectPath, description || undefined);
-      vscode.window.showInformationMessage(`Command added: ${label}`);
-    }
+    await store.addCommand(result.label, result.snippet, scope, result.folderId, projectPath, result.description);
+    vscode.window.showInformationMessage(`Command added: ${result.label}`);
   }
 
-  // --- Command palette fallback: asks for scope ---
+  // --- Add folder (scope already known): prompts for folder name ---
+  async function addFolderWithScope(scope: CommandScope, projectPath?: string) {
+    const label = await vscode.window.showInputBox({
+      prompt: 'Folder name',
+      placeHolder: 'e.g. Docker, Git, Build',
+    });
+    if (!label) { return; }
+
+    await store.addFolder(label, scope, projectPath);
+    vscode.window.showInformationMessage(`Folder created: ${label}`);
+  }
+
+  // --- Command palette: pick scope, then add a command ---
   context.subscriptions.push(
     vscode.commands.registerCommand('cmdClipboard.addItem', async () => {
       const scope = await pickScope();
@@ -147,20 +197,36 @@ export function activate(context: vscode.ExtensionContext) {
         if (!projectPath) { return; }
       }
 
-      await addItemWithScope(scope, projectPath);
+      await addCommandWithScope(scope, projectPath);
     })
   );
 
-  // --- View-specific add buttons (no scope picker needed) ---
+  // --- Command palette: pick scope, then add a folder ---
+  context.subscriptions.push(
+    vscode.commands.registerCommand('cmdClipboard.addFolderItem', async () => {
+      const scope = await pickScope();
+      if (!scope) { return; }
+
+      let projectPath: string | undefined;
+      if (scope === 'project') {
+        projectPath = await pickProjectPath();
+        if (!projectPath) { return; }
+      }
+
+      await addFolderWithScope(scope, projectPath);
+    })
+  );
+
+  // --- View-specific add command buttons (no scope picker needed) ---
   context.subscriptions.push(
     vscode.commands.registerCommand('cmdClipboard.addGlobalItem', async () => {
-      await addItemWithScope('global');
+      await addCommandWithScope('global');
     })
   );
 
   context.subscriptions.push(
     vscode.commands.registerCommand('cmdClipboard.addWorkspaceItem', async () => {
-      await addItemWithScope('workspace');
+      await addCommandWithScope('workspace');
     })
   );
 
@@ -168,7 +234,28 @@ export function activate(context: vscode.ExtensionContext) {
     vscode.commands.registerCommand('cmdClipboard.addProjectItem', async () => {
       const projectPath = await pickProjectPath();
       if (!projectPath) { return; }
-      await addItemWithScope('project', projectPath);
+      await addCommandWithScope('project', projectPath);
+    })
+  );
+
+  // --- View-specific add folder buttons ---
+  context.subscriptions.push(
+    vscode.commands.registerCommand('cmdClipboard.addGlobalFolder', async () => {
+      await addFolderWithScope('global');
+    })
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand('cmdClipboard.addWorkspaceFolder', async () => {
+      await addFolderWithScope('workspace');
+    })
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand('cmdClipboard.addProjectFolder', async () => {
+      const projectPath = await pickProjectPath();
+      if (!projectPath) { return; }
+      await addFolderWithScope('project', projectPath);
     })
   );
 
@@ -226,25 +313,25 @@ export function activate(context: vscode.ExtensionContext) {
       const folder = !cmd ? resolveFolder(item) : undefined;
 
       if (cmd) {
-        const label = await vscode.window.showInputBox({
-          prompt: 'Command name',
-          value: cmd.label,
+        const folders = store.getFolders(cmd.scope, cmd.projectPath);
+        const result = await showCommandForm({
+          mode: 'edit',
+          initial: {
+            label: cmd.label,
+            snippet: cmd.snippet,
+            description: cmd.description,
+            folderId: cmd.folderId,
+          },
+          folders: folders.map(f => ({ id: f.id, label: f.label })),
+          scopeBadge: formatScopeBadge(cmd.scope, cmd.projectPath),
         });
-        if (!label) { return; }
+        if (!result) { return; }
 
-        const snippet = await vscode.window.showInputBox({
-          prompt: 'Command to copy',
-          value: cmd.snippet,
-        });
-        if (!snippet) { return; }
-
-        const description = await vscode.window.showInputBox({
-          prompt: 'Description (optional)',
-          value: cmd.description ?? '',
-        });
-
-        await store.editCommand(cmd.id, label, snippet, description || undefined);
-        vscode.window.showInformationMessage(`Updated: ${label}`);
+        await store.editCommand(cmd.id, result.label, result.snippet, result.description);
+        if ((result.folderId ?? undefined) !== (cmd.folderId ?? undefined)) {
+          await store.moveToFolder(cmd.id, result.folderId);
+        }
+        vscode.window.showInformationMessage(`Updated: ${result.label}`);
       } else if (folder) {
         const label = await vscode.window.showInputBox({
           prompt: 'Folder name',
@@ -252,6 +339,32 @@ export function activate(context: vscode.ExtensionContext) {
         });
         if (!label) { return; }
 
+        await store.editFolder(folder.id, label);
+        vscode.window.showInformationMessage(`Renamed folder to: ${label}`);
+      }
+    })
+  );
+
+  // --- Rename (label-only quick edit, works for commands and folders) ---
+  context.subscriptions.push(
+    vscode.commands.registerCommand('cmdClipboard.renameCommand', async (item: CommandTreeItem) => {
+      const cmd = resolveCommand(item);
+      const folder = !cmd ? resolveFolder(item) : undefined;
+
+      if (cmd) {
+        const label = await vscode.window.showInputBox({
+          prompt: 'New name',
+          value: cmd.label,
+        });
+        if (!label || label === cmd.label) { return; }
+        await store.editCommand(cmd.id, label, cmd.snippet, cmd.description);
+        vscode.window.showInformationMessage(`Renamed to: ${label}`);
+      } else if (folder) {
+        const label = await vscode.window.showInputBox({
+          prompt: 'New folder name',
+          value: folder.label,
+        });
+        if (!label || label === folder.label) { return; }
         await store.editFolder(folder.id, label);
         vscode.window.showInformationMessage(`Renamed folder to: ${label}`);
       }
@@ -297,25 +410,16 @@ export function activate(context: vscode.ExtensionContext) {
         return;
       }
 
-      const label = await vscode.window.showInputBox({
-        prompt: 'Command name (display label)',
-        placeHolder: 'e.g. Start dev server',
+      const result = await showCommandForm({
+        mode: 'add',
+        initial: { label: '', snippet: '', description: '', folderId: folder.id },
+        scopeBadge: `${formatScopeBadge(folder.scope, folder.projectPath)} · ${folder.label}`,
+        // No folder picker: the folder is implicit from "Add Command Here"
       });
-      if (!label) { return; }
+      if (!result) { return; }
 
-      const snippet = await vscode.window.showInputBox({
-        prompt: 'The actual command to copy',
-        placeHolder: 'e.g. npm run dev',
-      });
-      if (!snippet) { return; }
-
-      const description = await vscode.window.showInputBox({
-        prompt: 'Description (optional, press Enter to skip)',
-        placeHolder: 'e.g. Starts the development server on port 3000',
-      });
-
-      await store.addCommand(label, snippet, folder.scope, folder.id, folder.projectPath, description || undefined);
-      vscode.window.showInformationMessage(`Command added to "${folder.label}": ${label}`);
+      await store.addCommand(result.label, result.snippet, folder.scope, folder.id, folder.projectPath, result.description);
+      vscode.window.showInformationMessage(`Command added to "${folder.label}": ${result.label}`);
     })
   );
 
@@ -362,6 +466,74 @@ export function activate(context: vscode.ExtensionContext) {
     })
   );
 
+  // --- Run Selected (multi-select chained run with && ) ---
+  context.subscriptions.push(
+    vscode.commands.registerCommand('cmdClipboard.runSelectedInTerminal', async (
+      clicked?: CommandTreeItem,
+      selected?: CommandTreeItem[],
+    ) => {
+      // VS Code passes (clickedItem, allSelectedItems) for tree-view context menus.
+      // From the palette neither is provided, so fall back to the visible tree view's selection.
+      let items: readonly CommandTreeItem[] = selected && selected.length > 0
+        ? selected
+        : (clicked ? [clicked] : []);
+
+      if (items.length === 0) {
+        for (const tv of treeViews) {
+          if (tv.visible && tv.selection.length > 0) {
+            items = tv.selection;
+            break;
+          }
+        }
+      }
+
+      const cmds = items
+        .map(i => resolveCommand(i))
+        .filter((c): c is CmdEntry => !!c);
+
+      if (cmds.length === 0) {
+        vscode.window.showInformationMessage('Select one or more commands to run.');
+        return;
+      }
+
+      const allowComplex = vscode.workspace
+        .getConfiguration('cmdClipboard')
+        .get<boolean>('allowComplexChaining', false);
+
+      if (!allowComplex && cmds.length > 1) {
+        const offenders = cmds.filter(c => /&&|\|\||;|\r|\n/.test(c.snippet));
+        if (offenders.length > 0) {
+          const names = offenders.map(c => `• ${c.label}`).join('\n');
+          const choice = await vscode.window.showWarningMessage(
+            `Some selected commands contain chaining operators (&&, ||, ;) or newlines and can't be safely chained:\n\n${names}`,
+            { modal: true, detail: `Enable "cmdClipboard.allowComplexChaining" in settings to run anyway.` },
+            'Open Settings',
+          );
+          if (choice === 'Open Settings') {
+            vscode.commands.executeCommand('workbench.action.openSettings', 'cmdClipboard.allowComplexChaining');
+          }
+          return;
+        }
+      }
+
+      if (cmds.length === 1) {
+        runInTerminal(cmds[0].snippet);
+        return;
+      }
+
+      const joined = cmds.map(c => c.snippet).join(' && ');
+      const numbered = cmds.map((c, i) => `${i + 1}. ${c.label}`).join('\n');
+      const confirm = await vscode.window.showInformationMessage(
+        `Run ${cmds.length} commands chained with && ?`,
+        { modal: true, detail: `${numbered}\n\n${joined}` },
+        'Run',
+      );
+      if (confirm !== 'Run') { return; }
+
+      runInTerminal(joined);
+    })
+  );
+
   // --- Search commands ---
   context.subscriptions.push(
     vscode.commands.registerCommand('cmdClipboard.searchCommands', async () => {
@@ -399,6 +571,91 @@ export function activate(context: vscode.ExtensionContext) {
         vscode.window.showInformationMessage(`Copied: ${pick.cmd.label}`);
       } else if (action?.action === 'run') {
         runInTerminal(pick.cmd.snippet);
+      }
+    })
+  );
+
+  // --- Export all commands and folders to JSON ---
+  context.subscriptions.push(
+    vscode.commands.registerCommand('cmdClipboard.exportAll', async () => {
+      const data = store.exportAllData();
+      const totalCmds = data.global.commands.length + data.workspace.commands.length;
+      const totalFolders = data.global.folders.length + data.workspace.folders.length;
+
+      if (totalCmds === 0 && totalFolders === 0) {
+        vscode.window.showInformationMessage('Nothing to export — no commands or folders saved yet.');
+        return;
+      }
+
+      const defaultName = `cmd-clipboard-backup-${new Date().toISOString().slice(0, 10)}.json`;
+      const wsFolder = vscode.workspace.workspaceFolders?.[0];
+      const defaultUri = wsFolder
+        ? vscode.Uri.joinPath(wsFolder.uri, defaultName)
+        : vscode.Uri.file(defaultName);
+
+      const target = await vscode.window.showSaveDialog({
+        defaultUri,
+        filters: { JSON: ['json'] },
+        saveLabel: 'Export Commands',
+      });
+      if (!target) { return; }
+
+      const json = JSON.stringify(data, null, 2);
+      await vscode.workspace.fs.writeFile(target, Buffer.from(json, 'utf8'));
+
+      const open = await vscode.window.showInformationMessage(
+        `Exported ${totalCmds} commands and ${totalFolders} folders.`,
+        'Open File',
+      );
+      if (open === 'Open File') {
+        await vscode.commands.executeCommand('vscode.open', target);
+      }
+    })
+  );
+
+  // --- Import commands and folders from JSON ---
+  context.subscriptions.push(
+    vscode.commands.registerCommand('cmdClipboard.importJson', async () => {
+      const picked = await vscode.window.showOpenDialog({
+        canSelectFiles: true,
+        canSelectFolders: false,
+        canSelectMany: false,
+        filters: { JSON: ['json'] },
+        openLabel: 'Import',
+      });
+      if (!picked || picked.length === 0) { return; }
+
+      let parsed: ExportData;
+      try {
+        const raw = await vscode.workspace.fs.readFile(picked[0]);
+        parsed = JSON.parse(Buffer.from(raw).toString('utf8')) as ExportData;
+      } catch (err: any) {
+        vscode.window.showErrorMessage(`Could not read backup file: ${err?.message ?? err}`);
+        return;
+      }
+
+      const incomingCmds = (parsed?.global?.commands?.length ?? 0) + (parsed?.workspace?.commands?.length ?? 0);
+      const incomingFolders = (parsed?.global?.folders?.length ?? 0) + (parsed?.workspace?.folders?.length ?? 0);
+      if (incomingCmds === 0 && incomingFolders === 0) {
+        vscode.window.showWarningMessage('Backup file contains no commands or folders.');
+        return;
+      }
+
+      const choice = await vscode.window.showWarningMessage(
+        `Import ${incomingCmds} commands and ${incomingFolders} folders?`,
+        { modal: true, detail: 'Merge: keep your existing data and add the imported entries.\nReplace: discard your current data and use the imported one.' },
+        'Merge',
+        'Replace',
+      );
+      if (choice !== 'Merge' && choice !== 'Replace') { return; }
+
+      try {
+        const summary = await store.importData(parsed, choice === 'Replace' ? 'replace' : 'merge');
+        vscode.window.showInformationMessage(
+          `Imported ${summary.commands} commands and ${summary.folders} folders.`,
+        );
+      } catch (err: any) {
+        vscode.window.showErrorMessage(`Import failed: ${err?.message ?? err}`);
       }
     })
   );
